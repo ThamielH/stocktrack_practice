@@ -147,10 +147,4 @@ if clean_stock_code:
             ticker = yf.Ticker(stock_code)
             
             # 取得精準的中文名稱
-            if clean_stock_code in twstock.codes:
-                chinese_name = twstock.codes[clean_stock_code].name
-            else:
-                chinese_name = clean_stock_code
-
-            # 判斷是否為 ETF
-            is_etf = clean_
+            if clean_
