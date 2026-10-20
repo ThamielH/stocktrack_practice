@@ -80,7 +80,7 @@ def scan_hot_stocks():
         try:
             t = yf.Ticker(code)
             hist = t.history(period="5d")
-            hist = hist.loc[:hist['Close'].last_valid_index()].copy()
+            hist = hist.dropna(subset=['Close'])
             if len(hist) >= 2:
                 close = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
@@ -129,9 +129,8 @@ sell_strategy = st.sidebar.selectbox(
      "3. 寬鬆波段 (僅觸及布林上軌時 賣出)"]
 )
 
-# 清理代號格式並自動加上 .TW
+# 清理代號格式
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
-stock_code = clean_stock_code + ".TW"
 
 # 自動從證交所官方 API 抓取本益比與殖利率的函數
 def fetch_twse_data(stock_no):
@@ -192,8 +191,21 @@ manual_yield = st.sidebar.number_input("殖利率 (%)", min_value=0.0, value=flo
 if clean_stock_code:
     with st.spinner(f"正在分析代號 {clean_stock_code} 中，請稍候..."):
         try:
-            ticker = yf.Ticker(stock_code)
+            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
             
+            # 優先嘗試上市 (.TW)
+            stock_code = clean_stock_code + ".TW"
+            ticker = yf.Ticker(stock_code)
+            df = ticker.history(period=fetch_period)
+            df = df.dropna(subset=['Close'])
+            
+            # 若上市抓不到或筆數太少，自動改試上櫃 (.TWO)
+            if df.empty or len(df) < 30:
+                stock_code = clean_stock_code + ".TWO"
+                ticker = yf.Ticker(stock_code)
+                df = ticker.history(period=fetch_period)
+                df = df.dropna(subset=['Close'])
+
             # 取得精準的中文名稱
             if clean_stock_code in twstock.codes:
                 chinese_name = twstock.codes[clean_stock_code].name
@@ -205,17 +217,8 @@ if clean_stock_code:
 
             st.header(f"📌 當前分析目標：{chinese_name} ({clean_stock_code}) {'【ETF專區】' if is_etf else ''}")
 
-            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
-            df = ticker.history(period=fetch_period)
-            
-            # **關鍵修復**：精準移除結尾可能產生的 NaN 空行，確保歷史與最新價完整
-            if not df.empty and 'Close' in df.columns:
-                last_valid = df['Close'].last_valid_index()
-                if last_valid is not None:
-                    df = df.loc[:last_valid].copy()
-
-            if df.empty or len(df) < 60:
-                st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
+            if df.empty or len(df) < 30:
+                st.error(f"找不到代號 {clean_stock_code} 的資料或歷史資料不足（需至少 30 交易日），請檢查代號是否正確。")
             else:
                 # 計算技術指標與價格數據
                 df['MA20'] = df['Close'].rolling(window=20).mean()
@@ -235,7 +238,7 @@ if clean_stock_code:
                 actual_days = min(int(backtest_days), len(df))
                 df_plot = df.tail(actual_days).copy()
 
-                # 最新價格與均價統計
+                # 最新價格與均價統計 (此時 df_plot 已排除 NaN，數值絕對正確)
                 latest_close = df_plot['Close'].iloc[-1]
                 latest_high = df_plot['High'].iloc[-1]
                 latest_low = df_plot['Low'].iloc[-1]
