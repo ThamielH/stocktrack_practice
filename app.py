@@ -80,6 +80,7 @@ def scan_hot_stocks():
         try:
             t = yf.Ticker(code)
             hist = t.history(period="5d")
+            hist = hist.loc[:hist['Close'].last_valid_index()].copy()
             if len(hist) >= 2:
                 close = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
@@ -128,7 +129,7 @@ sell_strategy = st.sidebar.selectbox(
      "3. 寬鬆波段 (僅觸及布林上軌時 賣出)"]
 )
 
-# 清理代號格式並自動加上 .TW (恢復最正確穩定的抓取方式)
+# 清理代號格式並自動加上 .TW
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
 stock_code = clean_stock_code + ".TW"
 
@@ -207,6 +208,12 @@ if clean_stock_code:
             fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
             df = ticker.history(period=fetch_period)
             
+            # **關鍵修復**：精準移除結尾可能產生的 NaN 空行，確保歷史與最新價完整
+            if not df.empty and 'Close' in df.columns:
+                last_valid = df['Close'].last_valid_index()
+                if last_valid is not None:
+                    df = df.loc[:last_valid].copy()
+
             if df.empty or len(df) < 60:
                 st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
             else:
