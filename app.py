@@ -11,7 +11,7 @@ import requests
 st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
 
 st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("基本面與證交所API自動串接 + 布林通道優化策略 + ETF折溢價評估 + 回測績效評估")
+st.markdown("熱門強勢股快篩 + 基本面與證交所API自動串接 + 布林通道策略 + ETF折溢價評估 + 回測績效")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -59,6 +59,53 @@ default_ticker = st.session_state.custom_watchlist[selected_stock]
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 手動輸入與回測設定")
+
+# **新功能：熱門與強勢股快速掃描推薦專區**
+@st.cache_data(ttl=1800)
+def scan_hot_stocks():
+    popular_tickers = {
+        "台積電": "2330.TW",
+        "鴻海": "2317.TW",
+        "聯發科": "2454.TW",
+        "台達電": "2308.TW",
+        "廣達": "2382.TW",
+        "富邦金": "2881.TW",
+        "長榮": "2603.TW",
+        "0050": "0050.TW",
+        "00878": "00878.TW",
+        "00919": "00919.TW"
+    }
+    results = []
+    for name, code in popular_tickers.items():
+        try:
+            t = yf.Ticker(code)
+            hist = t.history(period="5d")
+            if len(hist) >= 2:
+                close = hist['Close'].iloc[-1]
+                prev = hist['Close'].iloc[-2]
+                pct = ((close - prev) / prev) * 100
+                vol_wanzhang = hist['Volume'].iloc[-1] / 10000000
+                results.append({
+                    "名稱": name,
+                    "代號": code.replace(".TW", ""),
+                    "收盤": round(close, 2),
+                    "漲跌幅(%)": round(pct, 2),
+                    "成交量(萬張)": round(vol_wanzhang, 2)
+                })
+        except Exception:
+            continue
+    return pd.DataFrame(results)
+
+with st.sidebar.expander("🔥 熱門強勢股快篩清單"):
+    st.info("💡 點擊下方按鈕可快速檢視市場熱門權值股與高股息 ETF：")
+    hot_df = scan_hot_stocks()
+    if not hot_df.empty:
+        st.dataframe(hot_df, use_container_width=True, hide_index=True)
+        hot_selection = st.selectbox("快速載入熱門股代號", hot_df['代號'].tolist())
+        if st.button("載入此熱門股"):
+            default_ticker = hot_selection
+            st.success(f"已帶入代號 {hot_selection}！請重新整理或切換檢視。")
+
 stock_input = st.sidebar.text_input("直接輸入其他代號 (例: 2330 或 0050)", value=default_ticker)
 
 # 回測天數設定
