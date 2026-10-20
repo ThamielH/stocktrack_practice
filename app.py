@@ -11,7 +11,7 @@ import requests
 st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
 
 st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("熱門強勢股快篩 + 基本面與證交所API自動串接 + 布林通道策略 + ETF折溢價評估 + 回測績效")
+st.markdown("基本面與證交所API自動串接 + 布林通道優化策略 + ETF折溢價評估 + 回測績效評估")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -59,54 +59,6 @@ default_ticker = st.session_state.custom_watchlist[selected_stock]
 
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 手動輸入與回測設定")
-
-# 熱門與強勢股快速掃描推薦專區
-@st.cache_data(ttl=1800)
-def scan_hot_stocks():
-    popular_tickers = {
-        "台積電": "2330.TW",
-        "鴻海": "2317.TW",
-        "聯發科": "2454.TW",
-        "台達電": "2308.TW",
-        "廣達": "2382.TW",
-        "富邦金": "2881.TW",
-        "長榮": "2603.TW",
-        "0050": "0050.TW",
-        "00878": "00878.TW",
-        "00919": "00919.TW"
-    }
-    results = []
-    for name, code in popular_tickers.items():
-        try:
-            t = yf.Ticker(code)
-            hist = t.history(period="5d")
-            hist = hist.dropna(subset=['Close'])
-            if len(hist) >= 2:
-                close = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                pct = ((close - prev) / prev) * 100
-                vol_wanzhang = hist['Volume'].iloc[-1] / 10000000
-                results.append({
-                    "名稱": name,
-                    "代號": code.replace(".TW", ""),
-                    "收盤": round(close, 2),
-                    "漲跌幅(%)": round(pct, 2),
-                    "成交量(萬張)": round(vol_wanzhang, 2)
-                })
-        except Exception:
-            continue
-    return pd.DataFrame(results)
-
-with st.sidebar.expander("🔥 熱門強勢股快篩清單"):
-    st.info("💡 點擊下方按鈕可快速檢視市場熱門權值股與高股息 ETF：")
-    hot_df = scan_hot_stocks()
-    if not hot_df.empty:
-        st.dataframe(hot_df, use_container_width=True, hide_index=True)
-        hot_selection = st.selectbox("快速載入熱門股代號", hot_df['代號'].tolist())
-        if st.button("載入此熱門股"):
-            default_ticker = hot_selection
-            st.success(f"已帶入代號 {hot_selection}！請重新整理或切換檢視。")
-
 stock_input = st.sidebar.text_input("直接輸入其他代號 (例: 2330 或 0050)", value=default_ticker)
 
 # 回測天數設定
@@ -129,8 +81,9 @@ sell_strategy = st.sidebar.selectbox(
      "3. 寬鬆波段 (僅觸及布林上軌時 賣出)"]
 )
 
-# 清理代號格式
+# 清理代號格式並自動加上 .TW
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
+stock_code = clean_stock_code + ".TW"
 
 # 自動從證交所官方 API 抓取本益比與殖利率的函數
 def fetch_twse_data(stock_no):
@@ -191,21 +144,8 @@ manual_yield = st.sidebar.number_input("殖利率 (%)", min_value=0.0, value=flo
 if clean_stock_code:
     with st.spinner(f"正在分析代號 {clean_stock_code} 中，請稍候..."):
         try:
-            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
-            
-            # 優先嘗試上市 (.TW)
-            stock_code = clean_stock_code + ".TW"
             ticker = yf.Ticker(stock_code)
-            df = ticker.history(period=fetch_period)
-            df = df.dropna(subset=['Close'])
             
-            # 若上市抓不到或筆數太少，自動改試上櫃 (.TWO)
-            if df.empty or len(df) < 30:
-                stock_code = clean_stock_code + ".TWO"
-                ticker = yf.Ticker(stock_code)
-                df = ticker.history(period=fetch_period)
-                df = df.dropna(subset=['Close'])
-
             # 取得精準的中文名稱
             if clean_stock_code in twstock.codes:
                 chinese_name = twstock.codes[clean_stock_code].name
@@ -217,8 +157,11 @@ if clean_stock_code:
 
             st.header(f"📌 當前分析目標：{chinese_name} ({clean_stock_code}) {'【ETF專區】' if is_etf else ''}")
 
-            if df.empty or len(df) < 30:
-                st.error(f"找不到代號 {clean_stock_code} 的資料或歷史資料不足（需至少 30 交易日），請檢查代號是否正確。")
+            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
+            df = ticker.history(period=fetch_period)
+            
+            if df.empty or len(df) < 60:
+                st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
             else:
                 # 計算技術指標與價格數據
                 df['MA20'] = df['Close'].rolling(window=20).mean()
@@ -238,7 +181,7 @@ if clean_stock_code:
                 actual_days = min(int(backtest_days), len(df))
                 df_plot = df.tail(actual_days).copy()
 
-                # 最新價格與均價統計 (此時 df_plot 已排除 NaN，數值絕對正確)
+                # 最新價格與均價統計
                 latest_close = df_plot['Close'].iloc[-1]
                 latest_high = df_plot['High'].iloc[-1]
                 latest_low = df_plot['Low'].iloc[-1]
