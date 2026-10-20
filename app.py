@@ -60,7 +60,7 @@ default_ticker = st.session_state.custom_watchlist[selected_stock]
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 手動輸入與回測設定")
 
-# **新功能：熱門與強勢股快速掃描推薦專區**
+# 熱門與強勢股快速掃描推薦專區
 @st.cache_data(ttl=1800)
 def scan_hot_stocks():
     popular_tickers = {
@@ -79,7 +79,7 @@ def scan_hot_stocks():
     for name, code in popular_tickers.items():
         try:
             t = yf.Ticker(code)
-            hist = t.history(period="5d")
+            hist = t.history(period="5d").dropna(subset=['Close'])
             if len(hist) >= 2:
                 close = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
@@ -128,9 +128,8 @@ sell_strategy = st.sidebar.selectbox(
      "3. 寬鬆波段 (僅觸及布林上軌時 賣出)"]
 )
 
-# 清理代號格式並自動加上 .TW
+# 清理代號格式
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
-stock_code = clean_stock_code + ".TW"
 
 # 自動從證交所官方 API 抓取本益比與殖利率的函數
 def fetch_twse_data(stock_no):
@@ -191,8 +190,21 @@ manual_yield = st.sidebar.number_input("殖利率 (%)", min_value=0.0, value=flo
 if clean_stock_code:
     with st.spinner(f"正在分析代號 {clean_stock_code} 中，請稍候..."):
         try:
+            # 智慧判斷上市 (.TW) 還是上櫃 (.TWO)
+            stock_code = clean_stock_code + ".TW"
             ticker = yf.Ticker(stock_code)
+            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
+            df = ticker.history(period=fetch_period)
             
+            # 若上市找不到資料，自動改試上櫃 (.TWO)
+            if df.empty or len(df.dropna(subset=['Close'])) < 10:
+                stock_code = clean_stock_code + ".TWO"
+                ticker = yf.Ticker(stock_code)
+                df = ticker.history(period=fetch_period)
+
+            # 強制清洗資料：移除含有 NaN 的行，確保數據完整
+            df = df.dropna(subset=['Open', 'High', 'Low', 'Close', 'Volume'])
+
             # 取得精準的中文名稱
             if clean_stock_code in twstock.codes:
                 chinese_name = twstock.codes[clean_stock_code].name
@@ -204,11 +216,8 @@ if clean_stock_code:
 
             st.header(f"📌 當前分析目標：{chinese_name} ({clean_stock_code}) {'【ETF專區】' if is_etf else ''}")
 
-            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
-            df = ticker.history(period=fetch_period)
-            
-            if df.empty or len(df) < 60:
-                st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
+            if df.empty or len(df) < 30:
+                st.error(f"找不到代號 {clean_stock_code} 的資料或歷史資料不足（需至少 30 交易日），請檢查代號是否正確。")
             else:
                 # 計算技術指標與價格數據
                 df['MA20'] = df['Close'].rolling(window=20).mean()
@@ -228,7 +237,7 @@ if clean_stock_code:
                 actual_days = min(int(backtest_days), len(df))
                 df_plot = df.tail(actual_days).copy()
 
-                # 最新價格與均價統計
+                # 最新價格與均價統計 (確保取最後一個有效數值)
                 latest_close = df_plot['Close'].iloc[-1]
                 latest_high = df_plot['High'].iloc[-1]
                 latest_low = df_plot['Low'].iloc[-1]
@@ -355,7 +364,7 @@ if clean_stock_code:
                     p_c2.metric("策略勝率", f"{win_rate:.1f}%")
                     p_c3.metric("策略累積總報酬率", f"{cum_return:.2f}%", delta=f"{cum_return:.2f}%")
                 else:
-                    st.warning("⚠️ 在設定的回測區間內，未觸發完整的「買入→賣出」交易對，無法計算績效數據。")
+                    st.warning("⚠️ 在設定的回測區間內，未觸發完整的環節，無法計算績效數據。")
 
                 # 圖表繪製：K線、布林通道與買賣點
                 st.subheader(f"📈 {chinese_name} ({clean_stock_code}) 技術走勢與買賣點")
@@ -412,7 +421,7 @@ if clean_stock_code:
                 c1, c2 = st.columns(2)
                 with c1:
                     latest_vol = df_plot['Volume'].iloc[-1]
-                    latest_vol_wanzhang = latest_vol / 10000000  # 1萬張 = 1,000,000 股
+                    latest_vol_wanzhang = latest_vol / 10000000
                     st.metric("最新單日成交量", f"{latest_vol_wanzhang:,.2f} 萬張")
                 with c2:
                     latest_vol_ma5 = df_plot['Vol_MA5'].iloc[-1]
