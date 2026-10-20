@@ -11,7 +11,7 @@ import requests
 st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
 
 st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("基本面與證交所API自動串接 + 布林通道觸底反彈策略 + ETF折溢價評估 + 回測績效評估")
+st.markdown("基本面與證交所API自動串接 + 布林通道優化策略 + ETF折溢價評估 + 回測績效評估")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -69,6 +69,16 @@ backtest_days = st.sidebar.number_input(
     value=250, 
     step=10,
     help="輸入您想檢視與回測的歷史交易日天數（例如 250 天約等於一年）"
+)
+
+# 賣出策略條件選擇器
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ 賣出訊號過濾機制選擇")
+sell_strategy = st.sidebar.selectbox(
+    "選擇賣出條件嚴格度",
+    ["1. 精準波段 (觸及布林上軌 或 RSI>75 賣出) [推薦-過濾雜訊]", 
+     "2. 趨勢防守 (跌破 60MA 季線 或 觸及上軌 賣出)",
+     "3. 寬鬆波段 (僅觸及布林上軌時 賣出)"]
 )
 
 # 清理代號格式並自動加上 .TW
@@ -142,176 +152,5 @@ if clean_stock_code:
             else:
                 chinese_name = clean_stock_code
 
-            # 判斷是否為 ETF (代號以 00 開頭，或名稱包含 ETF)
-            is_etf = clean_stock_code.startswith("00") or "ETF" in chinese_name.upper()
-
-            st.header(f"📌 當前分析目標：{chinese_name} ({clean_stock_code}) {'【ETF專區】' if is_etf else ''}")
-
-            fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
-            df = ticker.history(period=fetch_period)
-            
-            if df.empty or len(df) < 60:
-                st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
-            else:
-                # 計算技術指標與價格數據
-                df['MA20'] = df['Close'].rolling(window=20).mean()
-                df['MA60'] = df['Close'].rolling(window=60).mean()
-                
-                std20 = df['Close'].rolling(window=20).std()
-                df['BB_Upper'] = df['MA20'] + (std20 * 2)
-                df['BB_Lower'] = df['MA20'] - (std20 * 2)
-
-                actual_days = min(int(backtest_days), len(df))
-                df_plot = df.tail(actual_days).copy()
-
-                # 最新價格與均價統計
-                latest_close = df_plot['Close'].iloc[-1]
-                latest_high = df_plot['High'].iloc[-1]
-                latest_low = df_plot['Low'].iloc[-1]
-                period_avg_price = df_plot['Close'].mean()
-
-                # 顯示收盤價、最高價、最低價及均價
-                st.subheader("📊 價格與均價資訊摘要")
-                p_col1, p_col2, p_col3, p_col4 = st.columns(4)
-                p_col1.metric("最新收盤價", f"{latest_close:.2f} 元")
-                p_col2.metric("最新最高價", f"{latest_high:.2f} 元")
-                p_col3.metric("最新最低價", f"{latest_low:.2f} 元")
-                p_col4.metric(f"所選區間均價 ({actual_days}日)", f"{period_avg_price:.2f} 元")
-
-                # 如果是 ETF，串接證交所 API 取得淨值並顯示折溢價資訊
-                if is_etf:
-                    st.subheader("🏷️ ETF 官方淨值與折溢價即時評估")
-                    
-                    # 嘗試從證交所 API 自動抓取淨值
-                    api_nav = fetch_etf_nav_api(clean_stock_code)
-                    if api_nav:
-                        st.success(f"🔗 已成功透過證交所官方 API 自動取得最新淨值 (NAV): {api_nav:.2f} 元")
-                        default_nav = api_nav
-                    else:
-                        st.info("💡 官方 API 目前暫無該 ETF 即時淨值回傳（或非盤中時段），已預設為最新收盤價，您可手動微調。")
-                        default_nav = latest_close
-
-                    etf_col1, etf_col2 = st.columns(2)
-                    with etf_col1:
-                        nav_input = st.number_input("ETF 當前淨值 (NAV) [可手動微調]", min_value=0.0, value=float(default_nav), step=0.05)
-                    with etf_col2:
-                        if nav_input > 0:
-                            premium_discount_pct = ((latest_close - nav_input) / nav_input) * 100
-                            if premium_discount_pct > 0:
-                                st.metric("當前折溢價狀態", f"溢價 +{premium_discount_pct:.2f}%", delta=f"+{premium_discount_pct:.2f}%", delta_color="inverse")
-                                st.warning("⚠️ 目前處於【溢價】狀態（市價高於淨值），買進需注意可能存在溢價收斂風險。")
-                            elif premium_discount_pct < 0:
-                                st.metric("當前折溢價狀態", f"折價 {premium_discount_pct:.2f}%", delta=f"{premium_discount_pct:.2f}%", delta_color="normal")
-                                st.success("✅ 目前處於【折價】狀態（市價低於淨值）。")
-                            else:
-                                st.metric("當前折溢價狀態", "市價與淨值相符 (0.00%)")
-                        else:
-                            st.warning("請輸入有效淨值以計算折溢價。")
-                else:
-                    # 一般股票顯示基本面與財報
-                    st.subheader("📊 基本面與最新財報摘要")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("本益比 (P/E)", f"{manual_pe:.2f}")
-                    with col2:
-                        st.metric("股息殖利率", f"{manual_yield:.2f}%")
-
-                    if manual_pe < 15 and manual_yield > 4.0:
-                        st.success("✅ 基本面良好：本益比低於 15 且殖利率高於 4%")
-                    else:
-                        st.info("ℹ️ 目前數值未同時滿足「本益比 < 15 且殖利率 > 4%」之條件")
-
-                # 布林通道觸底反彈策略邏輯
-                # 買入：股價由下往上突破布林下軌
-                df_plot['Buy_Signal'] = (
-                    (df_plot['Close'] > df_plot['BB_Lower']) & 
-                    (df_plot['Close'].shift(1) <= df_plot['BB_Lower'].shift(1))
-                )
-                
-                # 賣出：股價觸及上軌 或 跌破 20MA 中軌
-                df_plot['Sell_Signal'] = (
-                    (df_plot['Close'] >= df_plot['BB_Upper']) | 
-                    ((df_plot['Close'] < df_plot['MA20']) & (df_plot['Close'].shift(1) >= df_plot['MA20'].shift(1)))
-                )
-
-                # 回測績效
-                st.subheader("🎯 布林通道觸底反彈策略回測績效")
-                
-                trades = []
-                position = False
-                buy_price = 0.0
-
-                for date, row in df_plot.iterrows():
-                    if not position and row['Buy_Signal']:
-                        position = True
-                        buy_price = row['Close']
-                    elif position and row['Sell_Signal']:
-                        position = False
-                        sell_price = row['Close']
-                        ret = (sell_price - buy_price) / buy_price
-                        trades.append(ret)
-
-                total_trades = len(trades)
-                if total_trades > 0:
-                    win_trades = [r for r in trades if r > 0]
-                    win_rate = (len(win_trades) / total_trades) * 100
-                    cum_return = (np.prod([1 + r for r in trades]) - 1) * 100
-                    
-                    p_c1, p_c2, p_c3 = st.columns(3)
-                    p_c1.metric("回測總交易次數", f"{total_trades} 次")
-                    p_c2.metric("策略勝率", f"{win_rate:.1f}%")
-                    p_c3.metric("策略累積總報酬率", f"{cum_return:.2f}%", delta=f"{cum_return:.2f}%")
-                else:
-                    st.warning("⚠️ 在設定的回測區間內，未觸發完整的「買入→賣出」交易對，無法計算績效數據。")
-
-                # 圖表繪製：K線、布林通道與買賣點
-                st.subheader(f"📈 {chinese_name} ({clean_stock_code}) 布林通道技術走勢與買賣點")
-
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.75, 0.25])
-
-                # K線
-                fig.add_trace(go.Candlestick(
-                    x=df_plot.index,
-                    open=df_plot['Open'], high=df_plot['High'],
-                    low=df_plot['Low'], close=df_plot['Close'],
-                    name='K線'
-                ), row=1, col=1)
-
-                # 均線與布林通道
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], line=dict(color='#FFA500', width=1.5), name='20MA (中軌)'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA60'], line=dict(color='#1E90FF', width=1.5), name='60MA (季線)'), row=1, col=1)
-                
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Upper'], line=dict(color='rgba(173, 216, 230, 0.7)', width=1, dash='dot'), name='布林上軌 (+2σ)'), row=1, col=1)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Lower'], line=dict(color='rgba(173, 216, 230, 0.7)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.15)', name='布林下軌 (-2σ)'), row=1, col=1)
-
-                # 買賣點標記
-                buy_points = df_plot[df_plot['Buy_Signal']]
-                fig.add_trace(go.Scatter(
-                    x=buy_points.index, y=buy_points['Low'] * 0.98,
-                    mode='markers', marker=dict(symbol='triangle-up', size=14, color='green'),
-                    name='觸底買入訊號'
-                ), row=1, col=1)
-
-                sell_points = df_plot[df_plot['Sell_Signal']]
-                fig.add_trace(go.Scatter(
-                    x=sell_points.index, y=sell_points['High'] * 1.02,
-                    mode='markers', marker=dict(symbol='triangle-down', size=14, color='red'),
-                    name='達標賣出訊號'
-                ), row=1, col=1)
-
-                # 下方附圖：成交量與5日均量
-                df_plot['Vol_MA5'] = df_plot['Volume'].rolling(window=5).mean()
-                fig.add_trace(go.Bar(x=df_plot.index, y=df_plot['Volume'], name='成交量', marker_color='gray'), row=2, col=1)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Vol_MA5'], name='5日均量', line=dict(color='blue', width=1.2)), row=2, col=1)
-
-                fig.update_layout(
-                    title=f"{chinese_name} ({clean_stock_code}) 布林通道觸底反彈回測圖表",
-                    height=680,
-                    xaxis_rangeslider_visible=False,
-                    template="plotly_white"
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"資料抓取或分析時發生錯誤：{e}")
+            # 判斷是否為 ETF
+            is_etf = clean_
