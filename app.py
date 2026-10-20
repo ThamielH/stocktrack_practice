@@ -160,6 +160,10 @@ if clean_stock_code:
             fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
             df = ticker.history(period=fetch_period)
             
+            # 【關鍵修復】自動清洗末端可能產生的 NaN 空值，確保抓到的必然是最新有效價格
+            if not df.empty:
+                df = df.dropna(subset=['Close', 'Open', 'High', 'Low'])
+            
             if df.empty or len(df) < 60:
                 st.error(f"找不到代號 {stock_code} 的資料或歷史資料不足（需至少 60 交易日），請檢查代號是否正確。")
             else:
