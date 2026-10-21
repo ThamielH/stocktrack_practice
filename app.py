@@ -8,10 +8,10 @@ import twstock
 import requests
 
 # 設定網頁版面
-st.set_page_config(page_title="TW stock tracking", layout="wide")
+st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
 
-st.title("📈 TW stock tracking")
-st.markdown("TWSE官方OpenAPI本益比殖利率 + 即時報價 + RSI技術附圖 + 布林通道策略 + 回測績效")
+st.title("📈 台股進階全方位分析網頁工具")
+st.markdown("動態市場熱門強勢股快篩 + TWSE OpenAPI + RSI技術附圖 + 布林通道策略 + 回測績效")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -60,25 +60,23 @@ default_ticker = st.session_state.custom_watchlist[selected_stock]
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 手動輸入與回測設定")
 
-# 熱門與強勢股快速掃描推薦專區
-@st.cache_data(ttl=1800)
-def scan_hot_stocks():
-    popular_tickers = {
-        "台積電": "2330.TW",
-        "鴻海": "2317.TW",
-        "聯發科": "2454.TW",
-        "台達電": "2308.TW",
-        "廣達": "2382.TW",
-        "富邦金": "2881.TW",
-        "長榮": "2603.TW",
-        "0050": "0050.TW",
-        "00878": "00878.TW",
-        "00919": "00919.TW"
+# 【升級】動態市場熱門強勢股即時掃描與動態排序
+@st.cache_data(ttl=600)  # 每 10 分鐘自動重整更新一次最新熱門市場行情
+def scan_dynamic_hot_stocks():
+    # 擴大涵蓋市場重點權值股、AI概念股、高股息與市值型熱門 ETF
+    pool = {
+        "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
+        "2382": "廣達", "2881": "富邦金", "2882": "國泰金", "2603": "長榮",
+        "3034": "聯詠", "2379": "瑞昱", "3231": "緯創", "6669": "緯穎",
+        "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息",
+        "00919": "群益台灣精選高息", "00929": "復華台灣科技優息", "00940": "元大台灣價值高息"
     }
+    
     results = []
-    for name, code in popular_tickers.items():
+    for code_num, name in pool.items():
         try:
-            t = yf.Ticker(code)
+            ticker_code = f"{code_num}.TW"
+            t = yf.Ticker(ticker_code)
             hist = t.history(period="5d").dropna(subset=['Close'])
             if len(hist) >= 2:
                 close = hist['Close'].iloc[-1]
@@ -87,24 +85,32 @@ def scan_hot_stocks():
                 vol_wanzhang = hist['Volume'].iloc[-1] / 10000000
                 results.append({
                     "名稱": name,
-                    "代號": code.replace(".TW", ""),
+                    "代號": code_num,
                     "收盤": round(close, 2),
                     "漲跌幅(%)": round(pct, 2),
                     "成交量(萬張)": round(vol_wanzhang, 2)
                 })
         except Exception:
             continue
-    return pd.DataFrame(results)
+            
+    df_res = pd.DataFrame(results)
+    if not df_res.empty:
+        # 依據當日漲跌幅進行強勢度自動動態排序
+        df_res = df_res.sort_values(by="漲跌幅(%)", ascending=False).reset_index(drop=True)
+    return df_res
 
-with st.sidebar.expander("🔥 熱門強勢股快篩清單"):
-    st.info("💡 點擊下方按鈕可快速檢視市場熱門權值股與高股息 ETF：")
-    hot_df = scan_hot_stocks()
+with st.sidebar.expander("🔥 動態強勢熱門股快篩清單"):
+    st.info("💡 系統即時動態掃描市場強勢股與熱門 ETF，並依漲幅動態排序：")
+    hot_df = scan_dynamic_hot_stocks()
     if not hot_df.empty:
         st.dataframe(hot_df, use_container_width=True, hide_index=True)
-        hot_selection = st.selectbox("快速載入熱門股代號", hot_df['代號'].tolist())
-        if st.button("載入此熱門股"):
-            default_ticker = hot_selection
-            st.success(f"已帶入代號 {hot_selection}！請重新整理或切換檢視。")
+        # 動態選單下拉選擇帶入
+        hot_options = [f"{row['代號']} - {row['名稱']} ({row['漲跌幅(%)']:+.2f}%)" for _, row in hot_df.iterrows()]
+        selected_hot = st.selectbox("選擇欲帶入的動態推薦股", hot_options)
+        if st.button("載入此動態推薦股"):
+            code_to_load = selected_hot.split(" - ")[0]
+            default_ticker = code_to_load
+            st.success(f"已成功帶入代號 {code_to_load}！")
 
 stock_input = st.sidebar.text_input("直接輸入其他代號 (例: 2330 或 0050)", value=default_ticker)
 
@@ -131,7 +137,7 @@ sell_strategy = st.sidebar.selectbox(
 # 清理代號格式
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
 
-# 【升級】透過證交所官方 Open API 抓取本益比與殖利率
+# 透過證交所官方 Open API 抓取本益比與殖利率
 @st.cache_data(ttl=3600)
 def fetch_twse_openapi_data(stock_no):
     try:
@@ -151,7 +157,6 @@ def fetch_twse_openapi_data(stock_no):
     except Exception:
         pass
     
-    # 備用方案：若 OpenAPI 失敗則改用傳統 RWD 端點
     try:
         url = f"https://www.twse.com.tw/rwd/zh/BWIBBU/BWIBBU?response=json&stockNo={stock_no}"
         headers = {'User-Agent': 'Mozilla/5.0'}
