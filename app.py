@@ -11,7 +11,7 @@ import requests
 st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
 
 st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("證交所官方API即時報價 + 熱門強勢股快篩 + 基本面自動串接 + 布林通道策略 + ETF折溢價評估")
+st.markdown("證交所官方API即時報價 + 熱門強勢股快篩 + RSI技術附圖 + 布林通道策略 + ETF折溢價評估")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -33,7 +33,7 @@ with st.sidebar.expander("➕ 新增自選股"):
     if st.button("確認加入"):
         if new_code.strip():
             code_clean = new_code.strip().upper().replace(".TW", "").replace(".TWO", "")
-            auto_name = twstock.codes[code_clean].name if code_clean in twstock.codes else new_name.strip()
+            auto_name = twstock.codes[code_clean].name if clean_stock_code in twstock.codes else new_name.strip()
             label = f"{auto_name} ({code_clean})"
             st.session_state.custom_watchlist[label] = code_clean
             st.success(f"已成功新增 {label}！")
@@ -156,7 +156,7 @@ def fetch_twse_data(stock_no):
         pass
     return None, None
 
-# 【新增】透過證交所官方 MIS API 取得即時/最新報價（收盤價、最高價、最低價）
+# 透過證交所官方 MIS API 取得即時報價（收盤價、最高價、最低價）
 def fetch_twse_realtime_quote(stock_no):
     for market in ['tse', 'otc']:
         try:
@@ -166,10 +166,10 @@ def fetch_twse_realtime_quote(stock_no):
             data = res.json()
             if 'msgArray' in data and len(data['msgArray']) > 0:
                 item = data['msgArray'][0]
-                z = item.get('z', '-') # 最近成交價
-                h = item.get('h', '-') # 當日最高
-                l = item.get('l', '-') # 當日最低
-                y = item.get('y', '-') # 昨收
+                z = item.get('z', '-') 
+                h = item.get('h', '-') 
+                l = item.get('l', '-') 
+                y = item.get('y', '-') 
                 
                 close_val = float(z) if z and z != '-' else (float(y) if y and y != '-' else None)
                 high_val = float(h) if h and h != '-' else None
@@ -262,7 +262,7 @@ if clean_stock_code:
                 actual_days = min(int(backtest_days), len(df))
                 df_plot = df.tail(actual_days).copy()
 
-                # 透過證交所官方 MIS API 取得最新報價（若非營業時間或無回應，則退回 yfinance 最後一筆）
+                # 透過證交所官方 MIS API 取得最新報價
                 api_close, api_high, api_low = fetch_twse_realtime_quote(clean_stock_code)
 
                 latest_close = api_close if api_close is not None else df_plot['Close'].iloc[-1]
@@ -393,12 +393,17 @@ if clean_stock_code:
                 else:
                     st.warning("⚠️ 在設定的回測區間內，未觸發完整的「買入→賣出」交易對，無法計算績效數據。")
 
-                # 圖表繪製：K線、布林通道與買賣點
-                st.subheader(f"📈 {chinese_name} ({clean_stock_code}) 技術走勢與買賣點")
+                # 圖表繪製：K線、布林通道、RSI 與成交量 (三段式佈局)
+                st.subheader(f"📈 {chinese_name} ({clean_stock_code}) 技術走勢、RSI與買賣點")
 
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.75, 0.25])
+                fig = make_subplots(
+                    rows=3, cols=1, 
+                    shared_xaxes=True, 
+                    vertical_spacing=0.06, 
+                    row_heights=[0.55, 0.20, 0.25]
+                )
 
-                # K線
+                # Row 1: K線、MA與布林通道
                 fig.add_trace(go.Candlestick(
                     x=df_plot.index,
                     open=df_plot['Open'], high=df_plot['High'],
@@ -406,10 +411,8 @@ if clean_stock_code:
                     name='K線'
                 ), row=1, col=1)
 
-                # 均線與布林通道
                 fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], line=dict(color='#FFA500', width=1.5), name='20MA (中軌)'), row=1, col=1)
                 fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA60'], line=dict(color='#1E90FF', width=1.5), name='60MA (季線)'), row=1, col=1)
-                
                 fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Upper'], line=dict(color='rgba(173, 216, 230, 0.7)', width=1, dash='dot'), name='布林上軌 (+2σ)'), row=1, col=1)
                 fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Lower'], line=dict(color='rgba(173, 216, 230, 0.7)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(173, 216, 230, 0.15)', name='布林下軌 (-2σ)'), row=1, col=1)
 
@@ -428,14 +431,24 @@ if clean_stock_code:
                     name='賣出訊號'
                 ), row=1, col=1)
 
-                # 下方附圖：成交量與5日均量
+                # Row 2: RSI 指標附圖
+                fig.add_trace(go.Scatter(
+                    x=df_plot.index, y=df_plot['RSI'], 
+                    name='RSI (14)', line=dict(color='purple', width=1.3)
+                ), row=2, col=1)
+                
+                # RSI 參考線 (70 超買 / 30 超賣)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.6, row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.6, row=2, col=1)
+
+                # Row 3: 成交量與 5 日均量
                 df_plot['Vol_MA5'] = df_plot['Volume'].rolling(window=5).mean()
-                fig.add_trace(go.Bar(x=df_plot.index, y=df_plot['Volume'], name='成交量', marker_color='gray'), row=2, col=1)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Vol_MA5'], name='5日均量', line=dict(color='blue', width=1.2)), row=2, col=1)
+                fig.add_trace(go.Bar(x=df_plot.index, y=df_plot['Volume'], name='成交量', marker_color='gray'), row=3, col=1)
+                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Vol_MA5'], name='5日均量', line=dict(color='blue', width=1.2)), row=3, col=1)
 
                 fig.update_layout(
-                    title=f"{chinese_name} ({clean_stock_code}) 走勢與優化買賣訊號圖表",
-                    height=680,
+                    title=f"{chinese_name} ({clean_stock_code}) 技術走勢、RSI與買賣訊號圖表",
+                    height=780,
                     xaxis_rangeslider_visible=False,
                     template="plotly_white"
                 )
