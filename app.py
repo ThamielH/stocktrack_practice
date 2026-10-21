@@ -10,7 +10,7 @@ import requests
 # 設定網頁版面
 st.set_page_config(page_title="TW stock tracking", layout="wide")
 
-st.title("📈 TW stock trackig")
+st.title("📈 TW stock tracking")
 st.markdown("TWSE官方OpenAPI本益比殖利率 + 即時報價 + RSI技術附圖 + 布林通道策略 + 回測績效")
 
 # 1. 初始化網頁端的動態自選股清單
