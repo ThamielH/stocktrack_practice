@@ -7,11 +7,11 @@ from plotly.subplots import make_subplots
 import twstock
 import requests
 
-# 設定網頁版面
-st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
+# 設定網頁版面與網站名稱
+st.set_page_config(page_title="ShareLock TW - 台股全方位分析工具", layout="wide")
 
-st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("動態市場熱門強勢股快篩 + TWSE OpenAPI + RSI技術附圖 + 布林通道策略 + 回測績效")
+st.title("📈 ShareLock TW")
+st.markdown("綜合量價熱門推薦 + TWSE OpenAPI 本益比殖利率 + 即時報價 + RSI技術附圖 + 布林通道策略 + 回測績效")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -60,14 +60,15 @@ default_ticker = st.session_state.custom_watchlist[selected_stock]
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 手動輸入與回測設定")
 
-# 【升級】動態市場熱門強勢股即時掃描與動態排序
-@st.cache_data(ttl=600)  # 每 10 分鐘自動重整更新一次最新熱門市場行情
+# 【升級】動態市場熱門強勢股即時掃描（綜合單日漲跌幅與成交量排名 TOP 10）
+@st.cache_data(ttl=600)  # 每 10 分鐘自動快取更新一次
 def scan_dynamic_hot_stocks():
-    # 擴大涵蓋市場重點權值股、AI概念股、高股息與市值型熱門 ETF
+    # 觀察標的池：涵蓋主要權值股、熱門 AI 概念股與熱門 ETF
     pool = {
         "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
         "2382": "廣達", "2881": "富邦金", "2882": "國泰金", "2603": "長榮",
         "3034": "聯詠", "2379": "瑞昱", "3231": "緯創", "6669": "緯穎",
+        "2357": "華碩", "3008": "大立光", "2303": "聯電", "2312": "金寶",
         "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息",
         "00919": "群益台灣精選高息", "00929": "復華台灣科技優息", "00940": "元大台灣價值高息"
     }
@@ -82,7 +83,7 @@ def scan_dynamic_hot_stocks():
                 close = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 pct = ((close - prev) / prev) * 100
-                vol_wanzhang = hist['Volume'].iloc[-1] / 10000000
+                vol_wanzhang = hist['Volume'].iloc[-1] / 10000000  # 轉為萬張
                 results.append({
                     "名稱": name,
                     "代號": code_num,
@@ -94,20 +95,26 @@ def scan_dynamic_hot_stocks():
             continue
             
     df_res = pd.DataFrame(results)
-    if not df_res.empty:
-        # 依據當日漲跌幅進行強勢度自動動態排序
-        df_res = df_res.sort_values(by="漲跌幅(%)", ascending=False).reset_index(drop=True)
+    if not df_res.empty and len(df_res) > 1:
+        # 計算綜合分數：量價標準化排名權重 (漲跌幅 60% + 成交量 40%)
+        pct_std = (df_res['漲跌幅(%)'] - df_res['漲跌幅(%)'].min()) / (df_res['漲跌幅(%)'].max() - df_res['漲跌幅(%)'].min() + 1e-6)
+        vol_std = (df_res['成交量(萬張)'] - df_res['成交量(萬張)'].min()) / (df_res['成交量(萬張)'].max() - df_res['成交量(萬張)'].min() + 1e-6)
+        
+        df_res['綜合得分'] = pct_std * 0.6 + vol_std * 0.4
+        df_res = df_res.sort_values(by="綜合得分", ascending=False).head(10).reset_index(drop=True)
+        df_res = df_res.drop(columns=['綜合得分'])
+        
     return df_res
 
-with st.sidebar.expander("🔥 動態強勢熱門股快篩清單"):
-    st.info("💡 系統即時動態掃描市場強勢股與熱門 ETF，並依漲幅動態排序：")
+with st.sidebar.expander("🔥 綜合量價熱門推薦 TOP 10"):
+    st.info("💡 系統即時依據【單日漲跌幅(60%) + 成交量(40%)】綜合推薦前 10 名強勢標的：")
     hot_df = scan_dynamic_hot_stocks()
     if not hot_df.empty:
         st.dataframe(hot_df, use_container_width=True, hide_index=True)
-        # 動態選單下拉選擇帶入
-        hot_options = [f"{row['代號']} - {row['名稱']} ({row['漲跌幅(%)']:+.2f}%)" for _, row in hot_df.iterrows()]
-        selected_hot = st.selectbox("選擇欲帶入的動態推薦股", hot_options)
-        if st.button("載入此動態推薦股"):
+        # 下拉選單快速帶入
+        hot_options = [f"{row['代號']} - {row['名稱']} (漲{row['漲跌幅(%)']:+.2f}%, 量{row['成交量(萬張)']}萬張)" for _, row in hot_df.iterrows()]
+        selected_hot = st.selectbox("選擇欲帶入的推薦股", hot_options)
+        if st.button("載入此推薦股"):
             code_to_load = selected_hot.split(" - ")[0]
             default_ticker = code_to_load
             st.success(f"已成功帶入代號 {code_to_load}！")
@@ -239,7 +246,7 @@ manual_pe = st.sidebar.number_input("本益比 (P/E) [可微調]", min_value=0.0
 manual_yield = st.sidebar.number_input("殖利率 (%) [可微調]", min_value=0.0, value=float(default_yield), step=0.1)
 
 if clean_stock_code:
-    with st.spinner(f"正在分析代號 {clean_stock_code} 中，請稍候..."):
+    with st.spinner(f"ShareLock TW 正在分析代號 {clean_stock_code} 中，請稍候..."):
         try:
             fetch_period = "5y" if backtest_days > 500 else ("2y" if backtest_days > 250 else "1y")
             
