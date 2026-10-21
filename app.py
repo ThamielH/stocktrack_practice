@@ -8,10 +8,10 @@ import twstock
 import requests
 
 # 設定網頁版面
-st.set_page_config(page_title="台股進階全方位分析工具", layout="wide")
+st.set_page_config(page_title="TW stock tracking", layout="wide")
 
-st.title("📈 台股進階全方位分析網頁工具")
-st.markdown("證交所官方API即時報價 + 熱門強勢股快篩 + RSI技術附圖 + 布林通道策略 + ETF折溢價評估")
+st.title("📈 TW stock trackig")
+st.markdown("TWSE官方OpenAPI本益比殖利率 + 即時報價 + RSI技術附圖 + 布林通道策略 + 回測績效")
 
 # 1. 初始化網頁端的動態自選股清單
 if 'custom_watchlist' not in st.session_state:
@@ -33,7 +33,7 @@ with st.sidebar.expander("➕ 新增自選股"):
     if st.button("確認加入"):
         if new_code.strip():
             code_clean = new_code.strip().upper().replace(".TW", "").replace(".TWO", "")
-            auto_name = twstock.codes[code_clean].name if clean_stock_code in twstock.codes else new_name.strip()
+            auto_name = twstock.codes[code_clean].name if code_clean in twstock.codes else new_name.strip()
             label = f"{auto_name} ({code_clean})"
             st.session_state.custom_watchlist[label] = code_clean
             st.success(f"已成功新增 {label}！")
@@ -131,8 +131,27 @@ sell_strategy = st.sidebar.selectbox(
 # 清理代號格式
 clean_stock_code = stock_input.strip().upper().replace(".TW", "").replace(".TWO", "")
 
-# 自動從證交所官方 API 抓取本益比與殖利率的函數
-def fetch_twse_data(stock_no):
+# 【升級】透過證交所官方 Open API 抓取本益比與殖利率
+@st.cache_data(ttl=3600)
+def fetch_twse_openapi_data(stock_no):
+    try:
+        url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=5)
+        data = res.json()
+        
+        for item in data:
+            if item.get('Code') == stock_no:
+                pe_str = item.get('PEratio', '')
+                dy_str = item.get('DividendYield', '')
+                
+                pe_val = float(pe_str) if pe_str and pe_str != '-' else None
+                yield_val = float(dy_str) if dy_str and dy_str != '-' else None
+                return pe_val, yield_val
+    except Exception:
+        pass
+    
+    # 備用方案：若 OpenAPI 失敗則改用傳統 RWD 端點
     try:
         url = f"https://www.twse.com.tw/rwd/zh/BWIBBU/BWIBBU?response=json&stockNo={stock_no}"
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -154,6 +173,7 @@ def fetch_twse_data(stock_no):
             return pe_val, yield_val
     except Exception:
         pass
+        
     return None, None
 
 # 透過證交所官方 MIS API 取得即時報價（收盤價、最高價、最低價）
@@ -196,21 +216,22 @@ def fetch_etf_nav_api(stock_no):
         pass
     return None
 
-auto_pe, auto_yield = fetch_twse_data(clean_stock_code)
+auto_pe, auto_yield = fetch_twse_openapi_data(clean_stock_code)
 
 # 基本面數值設定區
 st.sidebar.markdown("---")
-st.sidebar.header("📊 基本面條件設定")
+st.sidebar.header("📊 基本面條件設定 (TWSE自動串接)")
 if auto_pe is not None and auto_yield is not None:
-    st.sidebar.success("🔗 已成功從證交所自動同步最新本益比與殖利率！")
+    st.sidebar.success(f"🔗 已從證交所 OpenAPI 自動同步本益比與殖利率！")
     default_pe = auto_pe
     default_yield = auto_yield
 else:
-    default_pe = 12.0
-    default_yield = 4.5
+    st.sidebar.info("ℹ️ 查無官方即時本益比/殖利率（或為 ETF/上櫃個股），已帶入參考預設值。")
+    default_pe = 15.0
+    default_yield = 4.0
 
-manual_pe = st.sidebar.number_input("本益比 (P/E)", min_value=0.0, value=float(default_pe), step=0.5)
-manual_yield = st.sidebar.number_input("殖利率 (%)", min_value=0.0, value=float(default_yield), step=0.1)
+manual_pe = st.sidebar.number_input("本益比 (P/E) [可微調]", min_value=0.0, value=float(default_pe), step=0.5)
+manual_yield = st.sidebar.number_input("殖利率 (%) [可微調]", min_value=0.0, value=float(default_yield), step=0.1)
 
 if clean_stock_code:
     with st.spinner(f"正在分析代號 {clean_stock_code} 中，請稍候..."):
